@@ -1,0 +1,123 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(tidytext)
+```
+
+
+```{r}
+myChats<-jsonlite::read_json("message_1.json")
+messages<-myChats$messages
+
+enframe(messages)%>%unnest_wider(value)->messagesDF
+
+```
+
+
+```{r}
+messagesDF%>%mutate(timestamp_s=timestamp_ms/1000, dateTime=as.POSIXct(timestamp_s, origin="1970-01-01",tz=""),timeElapsed=timestamp_s-tail(timestamp_s,n=1))->messagesDF
+
+messagesDF%>%
+  select(index=name, sender_name,dateTime,timeElapsed)->chatsTidy
+
+messagesDF%>%
+  select(index=name, sender_name,dateTime,content)->words
+
+
+chatsTidy%>%separate(sender_name, into = c("sender_name",NA), sep=" ")->chatsTidy
+
+#write_csv(chatsTidy,"chatsTidy.csv")
+#read_csv("chatsTidy.csv")->chatsTidy
+```
+
+
+# Compute waiting time 
++ Exclude follow ups.. 
+```{r}
+chatsTidy%>%mutate(answerTime_s=timeElapsed-lead(timeElapsed))%>%mutate(answerTime_s=case_when(sender_name==lead(sender_name) ~ as.numeric(NA),
+                                                                                       TRUE ~ answerTime_s),
+                                                                    answerTime_m=answerTime_s/60)->chatsTidy
+```
+
+# Finalise 
+```{r}
+chatsTidy%>%separate(dateTime,into = c("year","month","day","time"),sep="[- ]",remove = F)->chatsFinal
+
+```
+
+
+# Plot 
+
+## Compare answer time per every month 
+
+```{r}
+chatsFinal$month<-as.numeric(chatsFinal$month)
+chatsFinal%>%mutate(month.abb=case_when(month==1 ~ "Jan",month==2 ~ "Feb",month==3 ~ "Mar",
+                                        month==4 ~ "Apr",month==5 ~ "May",month==6 ~ "Jun",
+                                        month==7 ~ "Jul",month==8 ~ "Aug",month==9 ~ "Sep",
+                                        month==10 ~ "Oct",month==11 ~ "Nov",month==12 ~ "Dec"))%>%
+  filter(year<2021)->chatsPlot
+
+chatsPlot%>%
+  ggbarplot("month.abb", "answerTime_m",
+            merge = TRUE,
+            fill = "sender_name",
+            add = "mean",
+            order = month.abb,
+            xlab = "Month",
+            ylab = "average time needed to answer (minutes)",
+            facet.by = "year")
+
+```
+## Answe time per day of the week
+```{r}
+
+chatsFinal%>%mutate(wday=lubridate::wday(dateTime,label=F))->chatsFinal
+chatsFinal$wday<-factor(chatsFinal$wday,levels = 1:7,labels = c("Sun","Mon","Tue","Wed","Thu","Fri","Sat"))
+
+chatsFinal%>%filter(year<2021 & answerTime_m<10000)%>%
+  ggbarplot("wday","answerTime_m",
+            merge = TRUE,
+            fill = "sender_name",
+            add = "mean",
+            ylab = "average time needed to answer (minutes)",
+            xlab = "Day",
+            facet.by = "year")
+
+```
+# Used words
+```{r}
+library(stopwords)
+library(ggwordcloud)
+
+words%>%mutate(word=strsplit(content, " "))%>%unnest(word)->wordsLong
+stops<-c(stopwords(language = "en",source = stopwords_getsources()[1]),stopwords(language = "en",source = stopwords_getsources()[2]),
+         stopwords(language = "en",source = stopwords_getsources()[4]),stopwords(language = "en",source = stopwords_getsources()[5]),
+         stopwords(language = "en",source = stopwords_getsources()[7]))
+stop_words<-c(stop_words,c("I","I'm","And","But","It", "I "," I","l" ))
+stop_words<-as_tibble(stops)
+
+colnames(stop_words)<-c("word")
+
+anti_join(wordsLong,stop_words)->goodWords
+
+goodWords%>%group_by(sender_name,word)%>%tally()%>%arrange(desc(n))%>%
+  slice_head(n=20)
+
+
+
+goodWords%>%group_by(sender_name,word)%>%tally()%>%arrange(desc(n))%>%
+  slice_head(n=20)%>%
+  ggplot(aes(label=word,size=n))+
+  geom_text_wordcloud()+
+  facet_grid(~sender_name)
+
+
+
+```
+
