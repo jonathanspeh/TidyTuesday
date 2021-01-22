@@ -1,0 +1,170 @@
+---
+title: "Coctail reductions"
+author: "Jonathan Speh"
+date: "1/22/2021"
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(tidymodels)
+  library(tidytext)
+  library(embed)
+})
+```
+
+# Load and prepare data
+
+## Download and inspect
+```{r download, message=FALSE}
+cocktails <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-26/boston_cocktails.csv")
+
+knitr::kable(cocktails%>%group_by(ingredient)%>%tally(sort=TRUE)%>%top_n(5), caption = "Tally of ingredients in the raw data")
+```
+
+## Wrangling
+
++ Remove inconsistet naming
++ parse ingredients into numeric
++ convert into units that were not invented by someone who already had a few of those cocktails to many
++ filter out ingredients that are used less than 15 times
+
+### Parse
+```{r wrangle, warning=FALSE}
+cocktails%>%mutate(ingredient=str_to_lower(ingredient),
+                   ingredient=str_replace(ingredient,"-"," "),
+                   ingredient=str_remove(ingredient, " liquor"),
+                   ingredient=str_remove(ingredient, "(if desired)"),
+                   ingredient=case_when(str_detect(ingredient, "bitters") ~ "bitters",
+                                        str_detect(ingredient,"orange") ~ "orange juice",
+                                        str_detect(ingredient,"lemon") ~ "lemon juice",
+                                        str_detect(ingredient,"lime") ~ "lime juice",
+                                        str_detect(ingredient,"grapefruit") ~ "grapefruit juice",
+                                        TRUE ~ ingredient),
+                   measure=case_when(str_detect(ingredient, "bitters") ~ str_replace(measure, "oz$", "dash"),
+                                     TRUE ~ measure),
+                   measure = str_replace(measure, " ?1/2",".5"),
+                   measure = str_replace(measure, " ?3/4",".75"),
+                   measure = str_replace(measure, " ?1/4",".25"),
+                   measure_number = parse_number(measure),
+                   measure_number = if_else(str_detect(measure, "dash$"),
+                                            measure_number / 50,
+                                            measure_number),
+                   measure_number=measure_number * 29.57) %>%
+  add_count(ingredient)%>%
+  filter(n > 15) %>%
+  select(-n)%>%
+  distinct(row_id,ingredient, .keep_all = TRUE)%>%
+  na.omit()->cocktails_parsed
+
+knitr::kable(head(cocktails_parsed), caption = "Cocktail data after tidying, filtering and parsing")
+```
+
+### bring in long format
+```{r reshape}
+cocktails_parsed%>%select(-ingredient_number, -row_id, -measure)%>%
+  pivot_wider(names_from = ingredient, values_from=measure_number, values_fill = 0)%>%
+  janitor::clean_names()->cocktails_wide
+
+knitr::kable(head(cocktails_wide), caption= "Cocktail data in wide format")
+```
+
+# Dimension reduction
+## Principle component analysis
+
++  Unsupervicesd clustering using the tidymodels package. 
++  Ingredients are predictors
++  `all_predictors()` selects variables that have no role
++  `recipe()`function sets up (explains) analyses, does not compute anything
++  `prep` estimates required parameters from training set 
+
+
+```{r prepPCA}
+recipe(~ ., data=cocktails_wide)%>%
+  update_role(name, category, new_role = "id")%>%
+  step_normalize(all_predictors())%>% # centers and scales all predictors, i.e all ingredients
+  step_pca(all_predictors())->pca_rec
+
+prep(pca_rec)->pca_prep
+
+knitr::kable(pca_prep[2], caption = "Assignment of the variables after PCA")
+```
+### tidy PCA and inspect it
+
+```{r tidyPCA, fig.cap="Barlot showing the contributions of the different ingredients on the first five components"}
+tidy(pca_prep, 2)->pca_tidy # selects prep
+
+pca_tidy%>%
+  filter(component %in% paste0("PC",1:5))%>%
+  ggplot(aes(value,terms,fill=terms))+
+  geom_col(show.legend = FALSE)+
+  facet_wrap(~component, nrow = 1)
+```
++ Plot shows how much the components contribute to the different components. 
+  + Bars in different directions --> either or in the drink 
+
+```{r, fig.cap="Simplified barplot of the first four components. The bars schow the absolute contributionm colours indicated wether positive or negative"}
+pca_tidy%>%
+  filter(component %in% paste0("PC",1:4))%>%  # Select components 1:4
+  group_by(component)%>%
+  top_n(8, abs(value))%>%  # select top8 contributors for each component (by absolute value)
+  ungroup()%>%
+  mutate(terms=reorder_within(terms,abs(value), component))%>%  #order by contribution
+  ggplot(aes(abs(value),terms,fill=value>0))+    # value > 0 explains positve or negative contribution
+  geom_col()+
+  scale_y_reordered()+
+  facet_wrap(~component, scales = "free_y")
+```
+    
++  PC1 explains most variante
+  +  powdered sugar vs simple sirup makes largest difference
+  +  sweed / egg gine vs. sirup, lime tequilla
++  PC2 
+  +  Vermouth vs lemony
+
+### juice PCA
++  by default - 5 compnents
+    +  reduces 40 dimensions to 5 
+```{r juice, fig.cap="Dotplot of the first two components"}
+juice(pca_prep)%>%
+  ggplot(aes(PC1,PC2, label=name))+
+  geom_point(aes(colour = category), alpha=0.7,size=2)+
+  geom_text(check_overlap = TRUE, hjust="inward")+
+  labs(colour = NULL)
+
+```
++ First two components explain most variance in the ingredients
+
+
+
+## UMAP 
++ unsupervised ML algorithm for dimension reduction
++ tidymodels does not need much changes in the input 
+
+```{r prepUMAP}
+recipe(~ ., data=cocktails_wide)%>%
+  update_role(name, category, new_role = "id")%>%
+  step_normalize(all_predictors())%>% # centers and scales all predictors, i.e all ingredients
+  step_umap(all_predictors())->umap_rec
+
+prep(umap_rec)->umap_prep
+
+knitr::kable(umap_prep[2],caption="Results of UMAP computation")
+```
+### Juice UMAP
+```{r juiceUMAP, fig.cap="UMAP plot indicating similarity of the different cocktails."}
+juice(umap_prep)%>%
+  ggplot(aes(umap_1,umap_2, label=name))+
+  geom_point(aes(colour = category), alpha=0.7,size=2)+
+  geom_text(check_overlap = TRUE, hjust="inward")+
+  labs(colour = NULL)
+```
+
+
+
+
