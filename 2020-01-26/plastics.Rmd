@@ -1,0 +1,150 @@
+---
+title: "TidyTueday - pollution"
+author: "Jonathan Speh"
+date: "1/28/2021"
+output: html_document
+---
+
+I know, it's not a Tuesday, but I found that the plastic data sounded quite interesting. 
+
+
+```{r setup, include=FALSE}
+library(tidyverse)
+plastics <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-01-26/plastics.csv')
+```
+# Explore
+```{r}
+glimpse(plastics)
+range(plastics$year)
+head(plastics)
+unique(plastics$empty)
+
+plastics[!is.na(plastics$empty),]
+
+length(unique(plastics$country))
+```
+
+#Do continent wise comparison of trash 2019 - 2020  and volunteers 2019 - 2020
+
+
+```{r}
+left_join(plastics,gapminder[,1:2], by="country")%>%unique()%>%
+  filter(is.na(continent))%>%group_by(country)%>%tally()
+  
+
+left_join(plastics,gapminder[,1:2], by="country")->plasticsJoined
+
+head(plasticsJoined)
+
+plasticsJoined%>%
+  mutate(continent=as.character(continent),
+         continent=case_when(country=="Armenia" ~ "Asia",
+                              country=="Bhutan" ~ "Asia",
+                              country=="Cote D_ivoire" ~ "Africa",
+                              country=="Cyprus" ~ "Europe",
+                              country=="Equador" ~ "Americas",
+                              country=="Hong Kong" ~ "Asia",
+                              country=="Korea" ~ "Asia",
+                              country=="Latvia" ~ "Europe",
+                              country=="Lithuania" ~ "Europe",
+                              country=="Luxembourg" ~ "Europe",
+                              country=="Maldives" ~ "Asia",
+                              country=="NIGERIA" ~ "Asia",
+                              country=="Taiwan_ Republic of China (ROC)" ~ "Asia",
+                              country=="United Arab Emirates" ~ "Asia",
+                              country=="United Kingdom of Great Britain & Northern Ireland" ~ "Europe",
+                              country=="United States of America" ~ "Americas",
+                              country=="Ukraine" ~ "Europe",
+                              TRUE ~ continent),
+         parent_company=case_when(str_detect(parent_company, "Nestl") ~ "Nestle",
+                                  TRUE ~ parent_company))%>%filter(!is.na(continent) & !is.na(grand_total & !is.na(volunteers) & volunteers > 0) & grand_total > 1)%>%
+  unique()->plasticsCleaned
+  
+
+head(plasticsCleaned)
+  
+plasticsCleaned%>%pivot_longer(cols = 5:11, names_to="Category", values_to="Count")%>%
+  mutate(Contyear=paste(continent, year, sep = "_"))%>%
+  filter(continent != "Oceania",
+         continent!=0,
+         Category != "o")->plasticsFinal
+  
+plasticsFinal%>%
+  ggplot(aes(x=factor(year)))+
+  geom_bar(aes(y=Count,fill=Category),stat="summary", fun="mean",na.rm = TRUE, position = "stack")+
+  facet_wrap(~continent)
+
+
+
+
+
+```
+```{r}
+head(plasticsFinal)
+
+plasticsCleaned%>%filter(parent_company != "null",
+                         parent_company != "NULL",
+                         parent_company != "Unbranded",
+                         parent_company != "Grand Total",
+                         parent_company != "Assorted",
+                         continent != "Oceania")%>%
+  group_by(continent,year,parent_company)%>%summarise(tot=sum(grand_total),.groups="drop")%>%group_by(continent,year)%>%
+  slice_max(tot,n=3)%>%
+  ggplot(aes(x=year, y= tot, fill=parent_company))+
+  geom_bar(stat = "identity", position = "dodge")+
+  facet_wrap(~continent)
+
+```
+```{r}
+plasticsCleaned%>%filter(parent_company != "null",
+                         parent_company != "NULL",
+                         parent_company != "Unbranded",
+                         parent_company != "Grand Total",
+                         parent_company != "Assorted",
+                         continent != "Oceania")%>%
+  filter(continent=="Asia")%>%
+  group_by(parent_company)%>%summarise(tot=sum(grand_total),.groups="drop")%>%arrange(desc(tot))#-> 
+
+
+plasticsCleaned%>%filter(parent_company != "null",
+                         parent_company != "NULL",
+                         parent_company != "Unbranded",
+                         parent_company != "Grand Total",
+                         parent_company != "Assorted",
+                         continent != "Oceania")%>%
+  mutate(compCategory= case_when(str_detect(parent_company, "Coca-Cola") ~ "Top5",
+                                  str_detect(parent_company, "La Doo") ~ "Top5",
+                                  str_detect(parent_company, "Nestle") ~ "Top5",
+                                  str_detect(parent_company, "Unilever") ~ "Top5",
+                                  str_detect(parent_company, "Universal Rob") ~ "Top5",
+                                  TRUE ~ "other4000"),
+         compFill= case_when(str_detect(parent_company, "Coca-Cola") ~ "Coca-Cola",
+                                  str_detect(parent_company, "La Doo") ~ "La Doo",
+                                  str_detect(parent_company, "Nestle") ~ "Nestle",
+                                  str_detect(parent_company, "Unilever") ~ "Unilever",
+                                  str_detect(parent_company, "Universal Rob") ~ "Universal Robina Corporation",
+                                  TRUE ~ "others"),
+         yearCat=paste(compCategory, year, sep = " ")) %>%
+  filter(continent=="Asia")-> plasticsAsia
+
+plasticsAsia$compFill<-factor(plasticsAsia$compFill, levels = c("La Doo", "Nestle", "Coca-Cola",
+                                                                "Universal Robina Corporation","Unilever",
+                                                                "others"))  
+plasticsAsia%>%head()
+
+plasticsAsia%>%
+  ggplot(aes(x=factor(year)))+
+  geom_bar(aes(y=grand_total, fill=compFill),stat = "summary", fun="sum",na.rm = TRUE)+
+  facet_wrap(~continent)+
+  scale_y_continuous(labels = scales::comma)
+
+
+
+```
+
+
+
+
+
+
+
